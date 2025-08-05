@@ -181,6 +181,13 @@ cython_debug/
 *.engine
 *.tflite
 
+# Dataset files and archives
+datasets/
+*.zip
+mall_dataset/
+*.tar
+*.tar.gz
+
 # Output directories
 outputs/
 results/
