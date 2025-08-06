@@ -1,5 +1,6 @@
 """
 🛍️ Retail People Counter - Real-time people counting using YOLOv8 and OpenCV
+Enhanced with flexible line orientation and optimized tracking
 """
 
 import cv2
@@ -7,20 +8,24 @@ import numpy as np
 from ultralytics import YOLO
 import argparse
 import os
+import requests
 from collections import defaultdict
 
 
 class PeopleCounter:
-    def __init__(self, model_path="yolov8n.pt", confidence_threshold=0.5):
+    def __init__(self, model_path="yolov8l.pt", confidence_threshold=0.3, line_orientation="horizontal"):
         """
         Initialize the People Counter
         
         Args:
             model_path (str): Path to YOLOv8 model
             confidence_threshold (float): Confidence threshold for detections
+            line_orientation (str): "horizontal" for vertical movement, "vertical" for horizontal movement
         """
         self.model = YOLO(model_path)
         self.confidence_threshold = confidence_threshold
+        self.line_orientation = line_orientation
+        print(f"🎯 Line orientation: {line_orientation} ({'vertical movement' if line_orientation == 'horizontal' else 'horizontal movement'})")
         
         # Counting variables
         self.people_count = 0
@@ -29,90 +34,108 @@ class PeopleCounter:
         
         # Tracking variables
         self.tracked_people = {}
-        self.next_id = 0
+        self.next_id = 1
         
-        # Virtual line parameters (will be set based on video dimensions)
+        # Line coordinates (will be set based on video dimensions)
         self.entry_line = None
-        self.line_thickness = 3
-        self.line_color = (0, 255, 0)  # Green
+        
+        # Colors for visualization
+        self.line_color = (0, 255, 0)  # Green for line
+        self.bbox_color = (255, 0, 0)  # Blue for bounding boxes
         
         # Detection history for tracking
         self.detection_history = defaultdict(list)
         
     def set_entry_line(self, video_width, video_height):
         """
-        Set the virtual entry line based on video dimensions
-        Default: vertical line at 1/3 from left
+        Set entry line based on orientation
         """
-        x = video_width // 3
-        self.entry_line = {
-            'start': (x, 0),
-            'end': (x, video_height),
-            'x': x
-        }
+        if self.line_orientation == "horizontal":
+            # Horizontal line for vertical movement (up/down)
+            y = video_height // 3
+            self.entry_line = {
+                'start': (0, y),
+                'end': (video_width, y),
+                'coordinate': y,
+                'type': 'horizontal'
+            }
+            print(f"📍 Horizontal entry line set at y={y} (for vertical movement)")
+        else:
+            # Vertical line for horizontal movement (left/right)
+            x = video_width // 3
+            self.entry_line = {
+                'start': (x, 0),
+                'end': (x, video_height),
+                'coordinate': x,
+                'type': 'vertical'
+            }
+            print(f"📍 Vertical entry line set at x={x} (for horizontal movement)")
         
     def calculate_center(self, bbox):
         """Calculate center point of bounding box"""
         x1, y1, x2, y2 = bbox
-        return int((x1 + x2) / 2), int((y1 + y2) / 2)
+        center_x = int((x1 + x2) / 2)
+        center_y = int((y1 + y2) / 2)
+        return (center_x, center_y)
     
     def detect_people(self, frame):
-        """
-        Detect people in the frame using YOLOv8
-        
-        Args:
-            frame: Input video frame
-            
-        Returns:
-            List of detected person bounding boxes
-        """
+        """Detect people in the frame using YOLOv8"""
         results = self.model(frame, verbose=False)
-        people_detections = []
+        detections = []
         
         for result in results:
             boxes = result.boxes
             if boxes is not None:
                 for box in boxes:
-                    # Class 0 is 'person' in COCO dataset
-                    if int(box.cls) == 0 and float(box.conf) > self.confidence_threshold:
+                    # Get class ID and confidence
+                    class_id = int(box.cls[0])
+                    confidence = float(box.conf[0])
+                    
+                    # Only keep person detections (class_id = 0) above threshold
+                    if class_id == 0 and confidence >= self.confidence_threshold:
+                        # Get bounding box coordinates
                         x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-                        people_detections.append([int(x1), int(y1), int(x2), int(y2)])
+                        detections.append([int(x1), int(y1), int(x2), int(y2)])
         
-        return people_detections
+        return detections
     
     def simple_tracking(self, detections, frame_id):
-        """
-        Simple tracking based on proximity between frames
-        """
-        current_centers = [self.calculate_center(det) for det in detections]
+        """Simple tracking using proximity between frames"""
+        current_centers = [self.calculate_center(bbox) for bbox in detections]
         
-        # Update tracking
-        matched = set()
-        for person_id, history in self.tracked_people.items():
-            if len(history) > 0:
-                last_center = history[-1]['center']
-                # Find closest detection
-                min_dist = float('inf')
-                closest_idx = -1
+        # Update existing tracks
+        for person_id, history in list(self.tracked_people.items()):
+            if len(history) == 0:
+                continue
                 
-                for i, center in enumerate(current_centers):
-                    if i not in matched:
-                        dist = np.sqrt((center[0] - last_center[0])**2 + (center[1] - last_center[1])**2)
-                        if dist < min_dist and dist < 100:  # Max distance threshold
-                            min_dist = dist
-                            closest_idx = i
-                
-                if closest_idx != -1:
-                    matched.add(closest_idx)
-                    self.tracked_people[person_id].append({
-                        'center': current_centers[closest_idx],
-                        'bbox': detections[closest_idx],
-                        'frame': frame_id
-                    })
+            last_center = history[-1]['center']
+            min_dist = float('inf')
+            best_match_idx = -1
+            
+            # Find closest detection
+            for i, center in enumerate(current_centers):
+                dist = np.sqrt((center[0] - last_center[0])**2 + (center[1] - last_center[1])**2)
+                if dist < min_dist and dist < 100:  # Distance threshold
+                    min_dist = dist
+                    best_match_idx = i
+            
+            # Update track if match found
+            if best_match_idx >= 0:
+                bbox = detections[best_match_idx]
+                center = current_centers[best_match_idx]
+                self.tracked_people[person_id].append({
+                    'center': center,
+                    'bbox': bbox,
+                    'frame': frame_id
+                })
+                # Remove used detection
+                detections.pop(best_match_idx)
+                current_centers.pop(best_match_idx)
         
-        # Add new detections as new people
-        for i, (center, bbox) in enumerate(zip(current_centers, detections)):
-            if i not in matched:
+        # Create new tracks for remaining detections
+        for i, bbox in enumerate(detections):
+            if i < len(current_centers):
+                center = current_centers[i]
                 self.tracked_people[self.next_id] = [{
                     'center': center,
                     'bbox': bbox,
@@ -135,7 +158,7 @@ class PeopleCounter:
     
     def check_line_crossing(self, person_id):
         """
-        Check if a person has crossed the entry line
+        Check if a person has crossed the entry line based on orientation
         """
         if person_id not in self.tracked_people or len(self.tracked_people[person_id]) < 2:
             return None
@@ -144,13 +167,20 @@ class PeopleCounter:
         prev_center = history[-2]['center']
         curr_center = history[-1]['center']
         
-        line_x = self.entry_line['x']
+        line_coordinate = self.entry_line['coordinate']
         
-        # Check if crossed the line
-        if prev_center[0] < line_x and curr_center[0] >= line_x:
-            return 'entry'
-        elif prev_center[0] > line_x and curr_center[0] <= line_x:
-            return 'exit'
+        if self.line_orientation == "horizontal":
+            # Horizontal line - check y-coordinate crossing (vertical movement)
+            if prev_center[1] < line_coordinate and curr_center[1] >= line_coordinate:
+                return 'entry'  # Moving downward (top to bottom)
+            elif prev_center[1] > line_coordinate and curr_center[1] <= line_coordinate:
+                return 'exit'   # Moving upward (bottom to top)
+        else:
+            # Vertical line - check x-coordinate crossing (horizontal movement)
+            if prev_center[0] < line_coordinate and curr_center[0] >= line_coordinate:
+                return 'entry'  # Moving rightward (left to right)
+            elif prev_center[0] > line_coordinate and curr_center[0] <= line_coordinate:
+                return 'exit'   # Moving leftward (right to left)
         
         return None
     
@@ -164,20 +194,20 @@ class PeopleCounter:
             elif crossing == 'exit':
                 self.exit_count += 1
                 self.people_count -= 1
-                
-        # Ensure count doesn't go negative
-        self.people_count = max(0, self.people_count)
     
     def draw_visualizations(self, frame, detections):
-        """
-        Draw bounding boxes, counts, and entry line on frame
-        """
+        """Draw all visualizations on the frame"""
         # Draw entry line
         if self.entry_line:
-            cv2.line(frame, self.entry_line['start'], self.entry_line['end'], 
-                    self.line_color, self.line_thickness)
-            cv2.putText(frame, "ENTRY LINE", 
-                       (self.entry_line['x'] + 10, 30), 
+            cv2.line(frame, self.entry_line['start'], self.entry_line['end'], self.line_color, 3)
+            
+            # Add line label
+            if self.line_orientation == "horizontal":
+                label_pos = (10, self.entry_line['coordinate'] - 10)
+            else:
+                label_pos = (self.entry_line['coordinate'] + 10, 30)
+            
+            cv2.putText(frame, "ENTRY LINE", label_pos, 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, self.line_color, 2)
         
         # Draw bounding boxes
@@ -197,16 +227,18 @@ class PeopleCounter:
         height, width = frame.shape[:2]
         
         # Background rectangle for counts
-        cv2.rectangle(frame, (10, 10), (400, 120), (0, 0, 0), -1)
-        cv2.rectangle(frame, (10, 10), (400, 120), (255, 255, 255), 2)
+        cv2.rectangle(frame, (10, 10), (450, 120), (0, 0, 0), -1)
+        cv2.rectangle(frame, (10, 10), (450, 120), (255, 255, 255), 2)
         
-        # Count text
-        cv2.putText(frame, f"Current People: {self.people_count}", 
+        # Entry/Exit Flow display (more accurate)
+        net_flow = self.entry_count - self.exit_count
+        flow_sign = "+" if net_flow >= 0 else ""
+        cv2.putText(frame, f"Net Flow: {flow_sign}{net_flow} people", 
                    (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-        cv2.putText(frame, f"Total Entries: {self.entry_count}", 
+        cv2.putText(frame, f"Entries: {self.entry_count} | Exits: {self.exit_count}", 
                    (20, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-        cv2.putText(frame, f"Total Exits: {self.exit_count}", 
-                   (20, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
+        cv2.putText(frame, f"Entry/Exit Flow Tracking", 
+                   (20, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (100, 255, 100), 2)
     
     def process_video(self, video_path, output_path=None, display=True):
         """
@@ -285,35 +317,35 @@ class PeopleCounter:
         
         # Print final statistics
         print("\n" + "="*50)
-        print("FINAL STATISTICS")
+        print("FINAL STATISTICS - ENTRY/EXIT FLOW")
         print("="*50)
         print(f"Total Entries: {self.entry_count}")
         print(f"Total Exits: {self.exit_count}")
-        print(f"Current People Count: {self.people_count}")
+        net_flow = self.entry_count - self.exit_count
+        flow_sign = "+" if net_flow >= 0 else ""
+        print(f"Net Flow: {flow_sign}{net_flow} people")
         print(f"Frames Processed: {frame_count}")
-
+        print("Note: Net flow shows change during video period only")
+        print("="*50)
 
 def download_sample_video():
     """Download a sample video for testing"""
-    import requests
+    url = "https://sample-videos.com/zip/10/mp4/SampleVideo_1280x720_1mb.mp4"
+    filename = "sample_video.mp4"
     
-    # Sample video URL (you can replace this with mall dataset video)
-    sample_url = "https://sample-videos.com/zip/10/mp4/SampleVideo_1280x720_1mb.mp4"
-    
-    print("Downloading sample video...")
     try:
-        response = requests.get(sample_url, stream=True)
-        if response.status_code == 200:
-            with open("sample_video.mp4", "wb") as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
-            print("Sample video downloaded: sample_video.mp4")
-            return "sample_video.mp4"
-        else:
-            print("Failed to download sample video")
-            return None
+        print("Downloading sample video...")
+        response = requests.get(url, stream=True)
+        response.raise_for_status()
+        
+        with open(filename, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
+        
+        print(f"✅ Sample video downloaded: {filename}")
+        return filename
     except Exception as e:
-        print(f"Error downloading sample video: {e}")
+        print(f"Failed to download sample video: {e}")
         return None
 
 
@@ -321,12 +353,14 @@ def main():
     parser = argparse.ArgumentParser(description='People Counter using YOLOv8')
     parser.add_argument('--video', type=str, help='Path to input video file')
     parser.add_argument('--output', type=str, help='Path to output video file')
-    parser.add_argument('--model', type=str, default='yolov8n.pt', 
-                       help='YOLOv8 model path (default: yolov8n.pt)')
-    parser.add_argument('--confidence', type=float, default=0.5,
-                       help='Confidence threshold (default: 0.5)')
+    parser.add_argument('--model', type=str, default='yolov8l.pt', 
+                       help='YOLOv8 model path (default: yolov8l.pt)')
+    parser.add_argument('--confidence', type=float, default=0.3,
+                       help='Confidence threshold (default: 0.3)')
     parser.add_argument('--webcam', action='store_true',
                        help='Use webcam instead of video file')
+    parser.add_argument('--line', type=str, choices=['horizontal', 'vertical'], default='horizontal',
+                       help='Line orientation: horizontal (for vertical movement) or vertical (for horizontal movement)')
     parser.add_argument('--download-sample', action='store_true',
                        help='Download sample video for testing')
     
@@ -350,7 +384,7 @@ def main():
     
     # Initialize people counter
     print("Initializing People Counter...")
-    counter = PeopleCounter(model_path=args.model, confidence_threshold=args.confidence)
+    counter = PeopleCounter(model_path=args.model, confidence_threshold=args.confidence, line_orientation=args.line)
     
     # Process video
     print("Starting people counting...")
