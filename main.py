@@ -210,12 +210,14 @@ class PeopleCounter:
             cv2.putText(frame, "ENTRY LINE", label_pos, 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, self.line_color, 2)
         
-        # Draw bounding boxes
-        for bbox in detections:
-            x1, y1, x2, y2 = bbox
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
-            cv2.putText(frame, "Person", (x1, y1-10), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+        # Draw bounding boxes from tracked people (more reliable than raw detections)
+        for person_id, history in self.tracked_people.items():
+            if len(history) > 0:
+                bbox = history[-1]['bbox']
+                x1, y1, x2, y2 = bbox
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
+                cv2.putText(frame, f"Person {person_id}", (x1, y1-10), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
         
         # Draw counts
         self.draw_counts(frame)
