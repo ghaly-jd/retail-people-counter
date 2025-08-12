@@ -4,7 +4,9 @@ A real-time people counting system for retail stores, gyms, and events using YOL
 
 ![People Counter](https://img.shields.io/badge/YOLOv8-Optimized-green) ![Python](https://img.shields.io/badge/Python-3.8+-blue) ![OpenCV](https://img.shields.io/badge/OpenCV-4.8+-orange)
 
+<img width="2560" height="1440" alt="Screenshot 2025-08-12 at 8 04 49 PM" src="https://github.com/user-attachments/assets/f18a21d6-7786-4ae7-9133-d1740b2e3394" />
 
+<img width="2560" height="1440" alt="Screenshot 2025-08-12 at 8 05 04 PM" src="https://github.com/user-attachments/assets/f80d42bc-d050-4798-b809-0704948ae20b" />
 
 
 ## 🎯 Features
