@@ -6,7 +6,8 @@ A real-time people counting system for retail stores, gyms, and events using YOL
 
 
 
-https://github.com/user-attachments/assets/9fad74a5-0bdb-407b-932a-d146640ba51c
+<video src="[https://youtu.be/PBv2gwYtDls" controls width="600"></video>
+
 
 
 ## 🎯 Features
